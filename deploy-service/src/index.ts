@@ -2,17 +2,26 @@ import {
   SQSClient,
   ReceiveMessageCommand,
   DeleteMessageCommand,
+  type Message, // Import the Message type
 } from "@aws-sdk/client-sqs";
 import dotenv from "dotenv";
-
+import { fileURLToPath } from "url";
+import path from "path";
+import { downloadS3Folder } from "./s3Downloader.js"; // Uses .js for Node.js ESM compatibility
+import { runBuildInDocker } from "./dockerBuild.js";
 dotenv.config();
+export interface DeploymentMessage {
+    id: string;
+    repoUrl: string;
+}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // --- 1. SQS Client Setup ---
-// These are the same credentials and region as your other service
-const region = process.env.AWS_REGION;
-const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
-const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-const queueUrl = process.env.AWS_SQS_QUEUE_URL;
+const region = process.env.AWS_REGION as string;
+const accessKeyId = process.env.AWS_ACCESS_KEY_ID as string;
+const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY as string;
+const queueUrl = process.env.AWS_SQS_QUEUE_URL as string;
 
 if (!region || !accessKeyId || !secretAccessKey || !queueUrl) {
   throw new Error(
@@ -32,73 +41,84 @@ console.log("Deployment service started. Polling for messages...");
 
 // --- 2. The Infinite Polling Loop ---
 const startPolling = async () => {
-  // This while(true) loop will run forever
   while (true) {
     try {
       // --- 3. Poll for Messages ---
-      // This command attempts to retrieve messages from the queue
       const receiveCommand = new ReceiveMessageCommand({
         QueueUrl: queueUrl,
-        MaxNumberOfMessages: 1, // We'll process one message at a time
-        WaitTimeSeconds: 20, // This is "Long Polling".
-        // It tells SQS to wait up to 20 seconds for a message
-        // This is *much* more efficient and cost-effective than
-        // polling every millisecond.
+        MaxNumberOfMessages: 1,
+        WaitTimeSeconds: 20,
       });
 
       const data = await sqsClient.send(receiveCommand);
 
       // --- 4. Process Messages (if any) ---
       if (data.Messages && data.Messages.length > 0) {
-        const message = data.Messages[0];
-        
-        console.log("--- NEW MESSAGE RECEIVED ---");
-        
-        // This is what you asked for: log the raw content
-        console.log("Raw Message Body:", message.Body);
+        for (const message of data.Messages as Message[]) {
+          if (!message.ReceiptHandle) {
+            console.error(
+              "Received message with no ReceiptHandle. Cannot delete.",
+              message
+            );
+            continue;
+          }
 
-        // It's also good practice to parse it
-        try {
-            const body = JSON.parse(message.Body);
-            console.log("Parsed ID:", body.id);
-            console.log("Parsed Repo:", body.repoUrl);
+          console.log("--- NEW MESSAGE RECEIVED ---");
 
-            // TODO: In the future, you would do your real work here
-            // (e.g., run a build script, update a database, etc.)
+          if (message.Body) {
+            console.log("Raw Message Body:", message.Body);
 
-        } catch (parseError) {
-            console.error("Error parsing message body:", parseError);
+            try {
+              // Type assertion: We expect the body to be our defined message
+              const body = JSON.parse(message.Body) as DeploymentMessage;
+              console.log("Parsed ID:", body.id);
+              console.log("Parsed Repo:", body.repoUrl);
+
+              // --- START: DOWNLOAD LOGIC ---
+              const s3Prefix = `repos/${body.id}/`;
+              const localOutputPath = path.join(
+                __dirname,
+                "output",
+                body.id
+              );
+
+              console.log(
+                `Downloading files from S3 to: ${localOutputPath}`
+              );
+
+              await downloadS3Folder(s3Prefix, localOutputPath);
+              await runBuildInDocker(localOutputPath);
+
+              console.log(
+                `All files for deployment ${body.id} downloaded.`
+              );
+              // --- END: DOWNLOAD LOGIC ---
+            } catch (parseError) {
+              console.error("Error parsing message body:", parseError);
+            }
+          } else {
+            console.log("Received message with no Body.");
+          }
+
+          // --- 5. CRITICAL: Delete the Message ---
+          const deleteCommand = new DeleteMessageCommand({
+            QueueUrl: queueUrl,
+            ReceiptHandle: message.ReceiptHandle,
+          });
+
+          await sqsClient.send(deleteCommand);
+
+          console.log("Message processed and deleted.");
+          console.log("----------------------------");
         }
-
-        // --- 5. CRITICAL: Delete the Message ---
-        // After successfully processing the message, you *must*
-        // delete it from the queue. If you don't, it will
-        // re-appear after a "visibility timeout" and be
-        // processed again (and again, and again...)
-        const deleteCommand = new DeleteMessageCommand({
-          QueueUrl: queueUrl,
-          ReceiptHandle: message.ReceiptHandle, // This is the unique ID for *this* poll
-        });
-        
-        await sqsClient.send(deleteCommand);
-        
-        console.log("Message processed and deleted.");
-        console.log("----------------------------");
-
       } else {
-        // This is not an error, it just means no messages
-        // were in the queue during the 20-second poll.
         console.log("No new messages. Re-polling...");
       }
-
     } catch (err) {
       console.error("Error in polling loop:", err);
-      // Wait for 5 seconds before retrying if an error occurs
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
 };
 
-// Start the loop!
 startPolling();
-

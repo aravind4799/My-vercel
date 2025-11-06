@@ -1,6 +1,7 @@
 {
   "name": "deploy-service",
   "version": "1.0.0",
+  "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -10,13 +11,14 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.925.0",
     "@aws-sdk/client-sqs": "^3.925.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "typescript": "^5.9.3"
   }
 }
