@@ -5,7 +5,8 @@ import { generateRandomString } from "./utils.js";
 import path from "path";
 import { getAllFiles } from "./fileupload.js";
 import { fileURLToPath } from 'url';
-import runUpload from "./s3upload.js";
+import s3Upload from "./s3upload.js";
+import { sendSqsMessage } from "./sqsSender.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,7 +15,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-runUpload();
 
 app.post("/deploy", async (req, res) => {
   try {
@@ -23,16 +23,30 @@ app.post("/deploy", async (req, res) => {
     const repoPath = path.join(__dirname, 'repos', id);
     
     await simpleGit().clone(repoUrl, repoPath);
-    const files = await getAllFiles(repoPath);
+    const files =  getAllFiles(repoPath);
     
     console.log('Files:', files);    
     console.log('Repository URL:', repoUrl);
-    
 
-    res.json({
-      id,
-      files
+    const uploadFiles = files.map((file) => {
+      return s3Upload(file.slice(__dirname.length + 1),file);
     });
+
+    await Promise.allSettled(uploadFiles);
+    
+    // Send message to SQS to notify worker
+    console.log(`Queueing deployment ID for worker: ${id}`);
+    await sendSqsMessage({ 
+      id: id,
+      repoUrl: repoUrl 
+    });
+ 
+    res.json({
+      message: `Deployment ${id} successfully queued!`,
+      id: id,
+    });
+
+
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Failed to deploy repository' });

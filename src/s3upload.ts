@@ -30,33 +30,30 @@ const s3Client = new S3Client({
   },
 });
 
-const localFilePath = join(__dirname, "../test.txt");
-const s3FilePath = "uploads/test.txt";
-
-const fileStream = fs.createReadStream(localFilePath);
-
-fileStream.on("error", (err) => {
-  console.log("File Error", err);
-});
-
-const uploadParams = {
-  Bucket: bucketName,
-  Key: s3FilePath,
-  Body: fileStream,
-};
-
-const runUpload = async () => {
+const s3Upload = async (s3Path:string,localPath:string) => {
   try {
+
+    const fileStream = fs.createReadStream(localPath);
+    
+    fileStream.on("error", function (err) {
+      console.log("File Error", err);
+    });
+
+    const uploadParams = {
+      Bucket: bucketName,
+      Key: s3Path,
+      Body: fileStream,
+    };
+
     const command = new PutObjectCommand(uploadParams);
     const data = await s3Client.send(command);
 
     console.log("Success! File uploaded:", data);
-    const url = `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3FilePath}`;
-    console.log("File URL:", url);
+
   } catch (err) {
     console.error("S3 Upload Error:", err);
   }
 };
 
-export default runUpload;
+export default s3Upload;
 

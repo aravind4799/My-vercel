@@ -1,1 +1,1 @@
-{"root":["./src/fileupload.ts","./src/index.ts","./src/upload.ts","./src/utils.ts","./src/types/cors.d.ts"],"version":"5.9.3"}
+{"root":["./src/fileupload.ts","./src/index.ts","./src/s3upload.ts","./src/sqsSender.ts","./src/utils.ts","./src/types/cors.d.ts"],"version":"5.9.3"}
