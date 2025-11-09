@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Github, Send, Loader2, Server, Globe, PackageCheck, PackageX, Info, Zap } from 'lucide-react';
+import { Github, Send, Loader2, Server, Globe, PackageCheck, PackageX, Info, Zap, CheckCircle, XCircle } from 'lucide-react';
 
 // --- CONFIGURATION ---
 // These are loaded from your .env file (must be prefixed with VITE_)
@@ -61,7 +61,6 @@ function App() {
   const [status, setStatus] = useState("IDLE");
   const [logs, setLogs] = useState([]);
   const [result, setResult] = useState(null); 
-  // const [deploymentId, setDeploymentId] = useState(null); // --- REMOVED: This was unused ---
 
   // A stable, memoized 'addLog' function
   const addLog = useCallback((message, type = 'INFO') => {

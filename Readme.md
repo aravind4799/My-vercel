@@ -12,6 +12,8 @@ Here is a high-level diagram of the entire system architecture, showing all serv
 
 ![Reactor Architecture Diagram](./docs/System_Design.png)
 
+![Reactor Architecture Diagram](./docs/front_end.png)
+
 This is the complete lifecycle of a single deployment.
 
 ## Core Features
