@@ -2,13 +2,16 @@ import {
   SQSClient,
   ReceiveMessageCommand,
   DeleteMessageCommand,
-  type Message, // Import the Message type
+  type Message,
 } from "@aws-sdk/client-sqs";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import path from "path";
-
 import { startBuildAndWait } from "./codeBuild.js";
+
+// --- NEW: Import DynamoDB clients ---
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 dotenv.config();
 
@@ -19,7 +22,7 @@ export interface DeploymentMessage {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// SQS Client Setup
+// --- 1. SQS Client Setup (Unchanged) ---
 const region = process.env.AWS_REGION as string;
 const accessKeyId = process.env.AWS_ACCESS_KEY_ID as string;
 const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY as string;
@@ -39,13 +42,52 @@ const sqsClient = new SQSClient({
   },
 });
 
+// --- NEW: DynamoDB Client Setup ---
+const ddbClient = new DynamoDBClient({ region });
+const ddbDocClient = DynamoDBDocumentClient.from(ddbClient);
+const TABLE_NAME = "vercel-clone-status";
+
+// --- NEW: Helper function to update DynamoDB status ---
+const updateStatus = async (id: string, status: string, errorMsg?: string) => {
+  console.log(`Updating status for ${id} to ${status}`);
+  try {
+    let updateExpression = "SET #status = :s, updatedAt = :t";
+    let expressionAttributes: any = {
+      ":s": status,
+      ":t": new Date().toISOString(),
+    };
+    let attributeNames: any = {
+      "#status": "status", // "status" is a reserved word in DynamoDB
+    };
+
+    if (errorMsg) {
+      updateExpression += ", #error = :e";
+      expressionAttributes[":e"] = errorMsg;
+      attributeNames["#error"] = "error";
+    }
+
+    const command = new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { id: id },
+      UpdateExpression: updateExpression,
+      ExpressionAttributeNames: attributeNames,
+      ExpressionAttributeValues: expressionAttributes,
+    });
+    await ddbDocClient.send(command);
+  } catch (err) {
+    console.error(`Failed to update status for ${id}:`, err);
+  }
+};
+// --- END NEW HELPER ---
+
+
 console.log("Deployment service started. Polling for messages...");
 
-// --- 2. The Infinite Polling Loop  ---
+// --- 2. The Infinite Polling Loop ---
 const startPolling = async () => {
   while (true) {
     try {
-      // --- 3. Poll for Messages  ---
+      // --- 3. Poll for Messages ---
       const receiveCommand = new ReceiveMessageCommand({
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
@@ -66,43 +108,52 @@ const startPolling = async () => {
           }
 
           console.log("--- NEW MESSAGE RECEIVED ---");
+          
+          let body: DeploymentMessage | undefined; 
 
-          if (message.Body) {
-            console.log("Raw Message Body:", message.Body);
-
-            let body: DeploymentMessage | undefined;
-
-            try {
-
-              body = JSON.parse(message.Body) as DeploymentMessage;
-              // This service no longer downloads or builds locally.
-              // It just tells CodeBuild to do the work.
-              console.log(`Triggering AWS CodeBuild project for ${body.id}...`);
-
-              // The CodeBuild project will:
-              // 1. Pull source from S3 'repos/{body.id}/'
-              // 2. Run the build steps (install, build)
-              // 3. Upload artifacts to S3 'builds/{body.id}/'
-              await startBuildAndWait(body.id);
-
-              console.log(
-                `CodeBuild finished successfully for ${body.id}.`
-              );
-
-            } catch (err) {
-  
-              // If the build fails, we log it but DON'T delete the SQS message.
-              // This lets it be retried or moved to a dead-letter queue.
-              console.error(`Build failed for ID ${body ? body.id : 'UNKNOWN'}:`, err);
-              // We 'continue' to skip the delete command
-              continue;
+          try {
+            if (!message.Body) {
+              throw new Error("Received message with no Body.");
             }
-          } else {
-            console.log("Received message with no Body.");
+            
+            console.log("Raw Message Body:", message.Body);
+            body = JSON.parse(message.Body) as DeploymentMessage;
+            
+            if (!body || !body.id) {
+              throw new Error("Invalid message body or missing deployment ID.");
+            }
+
+            console.log("Parsed ID:", body.id);
+            console.log("Parsed Repo:", body.repoUrl);
+
+            
+            // --- STEP 1: Update status to IN_PROGRESS ---
+            await updateStatus(body.id, "IN_PROGRESS");
+
+            // --- STEP 2: Trigger AWS CodeBuild ---
+            console.log(`Triggering AWS CodeBuild project for ${body.id}...`);
+            await startBuildAndWait(body.id);
+
+            // --- STEP 3: Update status to DEPLOYED ---
+            console.log(
+              `CodeBuild finished successfully for ${body.id}.`
+            );
+            await updateStatus(body.id, "DEPLOYED");
+            
+
+          } catch (err: any) {
+            console.error(`Build failed for ID ${body?.id}:`, err);
+            
+            // --- STEP 4: Update status to ERROR ---
+            if (body?.id) {
+              await updateStatus(body.id, "ERROR", (err as Error).message || "Unknown error");
+            }
+            // We 'continue' to skip the delete command
+            // This allows the DLQ (Dead-Letter Queue) to catch it after a few retries
+            continue; 
           }
 
-          // --- 5. CRITICAL: Delete the Message ---
-          // This will only be reached if the try block succeeds
+          // --- 5. CRITICAL: Delete the Message (Only on success) ---
           const deleteCommand = new DeleteMessageCommand({
             QueueUrl: queueUrl,
             ReceiptHandle: message.ReceiptHandle,
@@ -117,11 +168,11 @@ const startPolling = async () => {
         console.log("No new messages. Re-polling...");
       }
     } catch (err) {
-      console.error("Error in polling loop:", err);
+      console.error("Error in main polling loop:", err);
+      // Wait 5 seconds before retrying the poll
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
 };
 
 startPolling();
-
