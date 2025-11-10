@@ -6,15 +6,30 @@ This project is a fully-functional, deployment platform. It can take any public 
 
 It's built as a decoupled, event-driven system of microservices, orchestrated entirely on AWS.
 
+
+[![Project Demo](./docs/front_end.png)](./docs/reactor-deployer.mp4")
+
+## Table of Contents
+
+1.  [Architecture & End-to-End Flow](#1-architecture--end-to-end-flow)
+    * [1.1. Step 1: The Upload & Status Creation](#11-step-1-the-upload--status-creation)
+    * [1.2. Step 2: The Real-time Handshake](#12-step-2-the-real-time-handshake)
+    * [1.3. Step 3: The Build (The Serverless Worker)](#13-step-3-the-build-the-serverless-worker)
+    * [1.4. Step 4: The "Magic" (Real-time Updates)](#14-step-4-the-magic-real-time-updates)
+    * [1.5. Step 5: Serving the Live Site](#15-step-5-serving-the-live-site)
+2.  [Key Architectural Decisions](#2-key-architectural-decisions)
+3.  [Setup & How to Run](#3-setup--how-to-run)
+4.  [Proof of Work (Local Testing)](#4-proof-of-work-local-testing)
+5.  [Project Write-up & Challenges](#5-project-write-up--challenges)
+6.  [Future Improvements](#6-future-improvements)
+
+---
+
 ## 1. Architecture & End-to-End Flow
 
 Here is a high-level diagram of the entire system architecture, showing all services and the flow of data.
 
 ![Reactor Architecture Diagram](./docs/System_Design.png)
-
-![Reactor Architecture Diagram](./docs/front_end.png)
-
-This is the complete lifecycle of a single deployment.
 
 ## Core Features
 
@@ -23,6 +38,8 @@ This is the complete lifecycle of a single deployment.
 * **Resilient Queueing:** Leverages **AWS SQS** with a **Dead-Letter Queue (DLQ)** to manage build jobs, ensuring a single "poison pill" (failing build) cannot block the entire deployment pipeline.
 * **Real-time Status Updates:** Provides instant, push-based feedback to the client (e.g., `PENDING`, `IN_PROGRESS`, `DEPLOYED`) using a serverless **WebSocket API (API Gateway)** triggered by **DynamoDB Streams**.
 * **Dynamic Subdomain Routing:** A custom Node.js/Express reverse-proxy (`request-handler`) serves the correct site by parsing the `id` from the request's subdomain (e.g., `abc123xyz.my-site.com`).
+
+---
 
 ## Tech Stack & Architecture
 
@@ -41,18 +58,6 @@ This project is a hybrid architecture, using Node.js microservices to orchestrat
 | **Real-time** | **API Gateway (WebSocket)** | Manages persistent WebSocket connections with thousands of clients. |
 | | **AWS Lambda** | "Glue" logic. One Lambda handles WebSocket connections (`$connect`, `register`), and another is triggered by DynamoDB Streams to push status updates. |
 | **Serving** | **Node.js + Express** | `request-handler`: A reverse-proxy that serves the correct static site from S3 based on the subdomain. |
-
-## Table of Contents
-
-1.  [Architecture & End-to-End Flow](#1-architecture--end-to-end-flow)
-    * [1.1. Step 1: The Upload & Status Creation](#11-step-1-the-upload--status-creation)
-    * [1.2. Step 2: The Real-time Handshake](#12-step-2-the-real-time-handshake)
-    * [1.3. Step 3: The Build (The Serverless Worker)](#13-step-3-the-build-the-serverless-worker)
-    * [1.4. Step 4: The "Magic" (Real-time Updates)](#14-step-4-the-magic-real-time-updates)
-    * [1.5. Step 5: Serving the Live Site](#15-step-5-serving-the-live-site)
-2.  [Key Architectural Decisions](#2-key-architectural-decisions)
-3.  [Setup & How to Run](#3-setup--how-to-run)
-4.  [Proof of Work (Local Testing)](#4-proof-of-work-local-testing)
 
 ---
 
@@ -105,17 +110,20 @@ This happens in parallel with Step 3, automatically.
 4.  It makes a `GetObject` call to S3 for the *exact* file (e.g., `s3://.../builds/abc123xyz/index.html`).
 5.  It streams the file from S3 directly to the user's browser.
 
+---
+
 ## 2. Key Architectural Decisions
 
-This project's architecture was designed to solve several common (and difficult) real-world engineering problems.
+This project's architecture was designed to solve several common real-world engineering problems.
 
 | Problem | Chosen Solution | Why? |
 | :--- | :--- | :--- |
 | **Security** | **AWS CodeBuild** | Running `npm install` on a host server is a massive vulnerability. CodeBuild provides an ephemeral, sandboxed environment that is destroyed after each build, perfectly isolating any malicious code. |
 | **Resilience** | **SQS + Dead-Letter Queue (DLQ)** | A single "poison pill" (failing build) can block an entire queue. A DLQ with a `maxReceiveCount` of 3 automatically isolates failing jobs, ensuring the pipeline never gets stuck. |
 | **Real-time Status** | **DynamoDB Streams + Lambda + WebSocket API** | Polling is inefficient and slow. This event-driven-flow (`DB Update` -> `Stream` -> `Lambda` -> `WebSocket`) pushes status changes to the client in milliseconds with zero wasted resources. |
-| **Broken Builds** | **`buildspec` Fixes** | We can't control the source code of deployed repos. The `buildspec` proactively fixes common errors (like Python versions for `node-sass`, `OpenSSL` errors, and `homepage` pathing bugs) to ensure a high build success rate. |
 | **Routing** | **Lowercase ID + Subdomain Proxy** | Browser hostnames are case-insensitive. By forcing all deployment `id`s to lowercase, we guarantee the hostname (`abc.com`) will always match the S3 path (`/abc/`). The reverse-proxy handles the rest. |
+
+---
 
 ## 3. Setup & How to Run
 
@@ -157,6 +165,8 @@ You must have 4 separate terminals open.
 
 Open the client (`http://localhost:5173`), paste in a Git URL, and watch the entire pipeline run in real-time.
 
+---
+
 ## 4. Proof of Work (Local Testing)
 
 This section documents the end-to-end functionality, showing how a local test can prove the entire cloud architecture is working.
@@ -171,24 +181,37 @@ The `request-handler` service is designed to serve sites on dynamic subdomains (
 2.  **Add a new line** that points your test domain to your local machine:
     ```
     127.0.0.1   my-vercel-ara.com
-    127.0.0.1   *.my-vercel-ara.com
+    1.0.0.1   *.my-vercel-ara.com
     ```
     *(Note: You'll need to use a domain from your `.env` file and a specific deployed ID, e.g., `127.0.0.1 abc123xyz.my-vercel-ara.com`)*
 
-### 4.2. End-to-End Test Screenshots
 
-Here is the flow, as seen from the user's perspective.
+---
 
-**1. Submitting the Deployment:**
-The user pastes a Git URL into the React client.
+## 5. Project Write-up & Challenges
 
-**2. Real-time Status Updates:**
-The client connects to the WebSocket and receives live status updates, which are pushed from AWS Lambda via DynamoDB Streams.
+I wrote a detailed article documenting the process, key challenges (like security, resilience, and real-time updates), and the architectural decisions I made while building this project.
 
-**3. Deployment Succeeded:**
-After the CodeBuild job finishes, the client receives the final "DEPLOYED" message and displays the live URL.
+* **Read the full story on Medium:** [How I Built a Serverless CI/CD Pipeline on AWS](https://medium.com/@araviku04/how-i-built-a-serverless-ci-cd-pipeline-on-aws-66f4e5a902c2)
 
-**4. Viewing the Live Site:**
-Clicking the link successfully resolves to the `request-handler` service, which serves the final `index.html` (and all its assets) from the S3 `builds/` folder.
+---
 
-*(You can add a screenshot here of the final, deployed `Covid_tracker` app running on your `...my-vercel-ara.com:5000` domain)*
+## 6. Future Improvements
+
+This architecture does the job, but as a next step, several parts could be upgraded to be fully serverless, more automated, and more cost-effective.
+
+### 6.1. SQS Poller → SQS-Triggered Lambda
+
+* **Problem:** The `deployment-service` is a Node.js server that runs 24/7 in a `while(true)` loop, just to poll an SQS queue. This wastes a server (e.g., an EC2 instance) and its associated costs, and it's a single point of failure.
+* **Improvement:** Replace the entire `deployment-service` with a new **AWS Lambda** function. You can configure SQS to trigger this Lambda directly (an "Event Source Mapping") the instant a message arrives.
+* **Benefit:** This is a truly serverless, event-driven architecture. It's far cheaper (you pay for ~1 second of Lambda compute vs. a 24/7 server), and it scales automatically. If 1,000 messages arrive, AWS will spin up 1,000 Lambda instances to process them in parallel.
+
+### 6.2. Manual Deploy → GitHub Webhook (True Git-to-Global CI/CD)
+
+* **Problem:** The pipeline currently starts when a user manually copies and pastes a Git URL into the React UI.
+* **Improvement:** Implement a **GitHub (or GitLab) Webhook**. The user would install this webhook into their repository. When they `git push` to their `main` branch, GitHub automatically sends a `POST` request to our `upload-service`.
+* **Benefit:** This creates a true, automated "Git-to-Global" CI/CD pipeline. The developer's only action is `git push`, and the rest of the deployment is completely automatic.
+
+---
+
+> ⭐ If you learned something new or found this project helpful, **star the repository**!
